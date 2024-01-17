@@ -1,0 +1,178 @@
+#include "circle.h"
+#include <iomanip>
+#include <string>
+#include <cmath>
+
+#define PI 3.1415926
+
+MyCom com;
+OmniDrive omniDrive;
+Odometry odometry;
+Bumper bumper;
+Motor motor[3];
+
+size_t motor_num = 3;
+size_t col_width = 13;
+int bumcount = 0;
+bool prevcondition = false;
+
+void Write(double x, double y, double phi)
+{
+	std::cout << " | " << std::setw(col_width) << (x);
+	std::cout << " | " << std::setw(col_width) << (y) << " | ";
+	std::cout << std::setw(col_width) << (phi) << " | ";
+	for (size_t i = 0; i < motor_num; i++) {
+		std::cout << std::setw(col_width) <<
+			motor[i].actualPosition() << " | ";
+	}
+	for (size_t i = 0; i < motor_num; i++) {
+		std::cout << std::setw(col_width) <<
+			motor[i].actualVelocity() << " | ";
+	}
+	for (size_t i = 0; i < motor_num; i++) {
+		std::cout << std::setw(col_width) <<
+			motor[i].motorCurrent() << " | ";
+	}
+	std::cout << std::endl;
+}
+
+void BumperCheck()
+{
+	bool state = bumper.value();
+
+	if (!prevcondition && state)
+	{
+		bumcount++;
+	}
+	prevcondition = state;
+}
+
+void Movement(float speedX, float speedY, float omega, unsigned int sleepMS)
+{
+	omniDrive.setVelocity(speedX, speedY, omega);
+	rec::robotino::api2::msleep(sleepMS);
+}
+
+int main(int argc, char** argv) {
+	// Default IP address Robotino 4
+	std::string ip_addr = "192.168.0.1";
+
+	// Connect
+	std::cout << "Connecting ...";
+	com.setAddress(ip_addr.c_str());
+	com.connectToServer(true);
+	if (!com.isConnected()) {
+		std::cout << std::endl << "Could not connect to " <<
+			com.address() << std::endl;
+		rec::robotino::api2::shutdown();
+		exit(1);
+	}
+	else {
+		std::cout << "success" << std::endl;
+	}
+
+	for (unsigned int i = 0; i < motor_num; i++) {
+		motor[i].setMotorNumber(i);
+	}
+
+	const unsigned int sleepMs = 100;
+	const float speed = 0.05; // in m/s
+	const float rotationSpeed = PI / 2; // 90 degrees rotation
+	const float sideA = 0.4;//length of the  sideA
+	const float sideB = 0.8;// length of the  sideB
+	double x;  // x position
+	double y;   // y positon
+	double phi;  // rotation 
+	unsigned int start_time = com.msecsElapsed();
+	unsigned int time = com.msecsElapsed();
+	int number = 0;
+
+	// Table headline
+	std::cout << " | " << std::setw(col_width) << "x" << " | " <<
+		std::setw(col_width) << "y"
+		<< " | " << std::setw(col_width) << "phi"
+		<< " | " << std::setw(col_width) << "M1 pos" << " | "
+		<< std::setw(col_width) << "M2 pos" << std::setw(col_width) << "M3 pos"
+		<< " | " << std::setw(col_width) << "M1 vel" << " | "
+		<< std::setw(col_width) << "M2 vel"
+		<< " | " << std::setw(col_width) << "M3 vel" << " | "
+		<< std::setw(col_width) << "M1 cur"
+		<< " | " << std::setw(col_width) << "M2 cur" << " | "
+		<< std::setw(col_width) << "M3 cur"
+		<< " | " << std::endl;
+	std::cout << " |";
+	for (size_t i = 0; i < 12; i++) {
+		std::cout << std::string(col_width + 2, '-') << "|";
+	}
+	std::cout << std::endl;
+
+
+	int ST = 0;
+	odometry.set(0, 0, 0, false);
+	rec::robotino::api2::msleep(sleepMs);
+
+	while (number < 4)
+	{
+		switch (ST)
+		{
+		case 0:
+			odometry.readings(&x, &y, &phi);
+			if (y < sideA)
+			{
+				Movement(0, speed, 0, sleepMs); // move up
+				Write(x, y, phi);
+			}
+			else
+			{
+				Movement(0, 0, 0, sleepMs);
+				ST = 1;
+			}
+			break;
+		case 1:
+			odometry.readings(&x, &y, &phi);
+			if (x > -sideB)
+			{
+				Movement(-speed, 0, 0, sleepMs); // move left
+				Write(x, y, phi);
+			}
+			else
+			{
+				Movement(0, 0, 0, sleepMs);
+				ST = 2;
+			}
+			break;
+		case 2:
+			odometry.readings(&x, &y, &phi);
+			if (y > 0)
+			{
+				Movement(0, -speed, 0, sleepMs); // move down
+				Write(x, y, phi);
+			}
+			else
+			{
+				Movement(0, 0, 0, sleepMs);
+				ST = 3;
+			}
+			break;
+		case 3:
+			odometry.readings(&x, &y, &phi);
+			if (x < 0)
+			{
+				Movement(speed, 0, 0, sleepMs); // move right
+				Write(x, y, phi);
+			}
+			else
+			{
+				Movement(0, 0, 0, sleepMs);
+				ST = 0;
+				number++;
+			}
+			break;
+		}
+	}
+
+	Movement(0, 0, 0, sleepMs); // stop
+	com.disconnectFromServer();
+	rec::robotino::api2::shutdown();
+	return 0;
+}
