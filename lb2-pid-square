@@ -1,0 +1,241 @@
+#include "circle.h"
+#include <iomanip>
+#include <fstream>
+#include <string>
+#include <cmath>
+
+#define PI 3.1415926
+
+MyCom com;
+OmniDrive omniDrive;
+Odometry odometry;
+Bumper bumper;
+Motor motor[3];
+
+size_t motor_num = 3;
+size_t col_width = 13;
+int bumcount = 0;
+bool prevcondition = false;
+
+// PID parameters
+double Kp = 1; // Proportional coefficient
+double Ki = 0.01; // Integral coefficient
+double Kd = 0; // Derivative coefficient
+
+double previous_error = 0.0;
+double integral = 0.0;
+
+void Write(double x, double y, double phi, std::ofstream& actualTrajectory)
+{
+	std::cout << " | " << std::setw(col_width) << (x);
+	std::cout << " | " << std::setw(col_width) << (y) << " | ";
+	std::cout << std::setw(col_width) << (phi) << " | ";
+	for (size_t i = 0; i < motor_num; i++) {
+		std::cout << std::setw(col_width) <<
+			motor[i].actualPosition() << " | ";
+	}
+	for (size_t i = 0; i < motor_num; i++) {
+		std::cout << std::setw(col_width) <<
+			motor[i].actualVelocity() << " | ";
+	}
+	for (size_t i = 0; i < motor_num; i++) {
+		std::cout << std::setw(col_width) <<
+			motor[i].motorCurrent() << " | ";
+	}
+
+	std::cout << std::endl;
+
+	actualTrajectory << x << " " << y << std::endl;
+}
+
+void BumperCheck()
+{
+	bool state = bumper.value();
+
+	if (!prevcondition && state)
+	{
+		bumcount++;
+	}
+	prevcondition = state;
+}
+
+void PIDMovement(float targetSpeedX, float targetSpeedY, float currentSpeedX, float currentSpeedY, float omega, unsigned int sleepMS)
+{
+	// Calculate error
+	double errorX = targetSpeedX - currentSpeedX;
+	double errorY = targetSpeedY - currentSpeedY;
+
+	// Proportional term
+	double PoutX = Kp * errorX;
+	double PoutY = Kp * errorY;
+
+	// Integral term
+	integral += errorX * sleepMS / 1000.0;
+	double IoutX = Ki * integral;
+
+	integral += errorY * sleepMS / 1000.0;
+	double IoutY = Ki * integral;
+
+	// Derivative term
+	double derivativeX = (errorX - previous_error) / (sleepMS / 1000.0);
+	double DoutX = Kd * derivativeX;
+
+	double derivativeY = (errorY - previous_error) / (sleepMS / 1000.0);
+	double DoutY = Kd * derivativeY;
+
+	// Total output
+	double outputX = PoutX + IoutX + DoutX;
+	double outputY = PoutY + IoutY + DoutY;
+
+	// Update previous error
+	previous_error = errorX;
+
+	// Apply the PID output to the movement
+	omniDrive.setVelocity(outputX, outputY, omega);
+	rec::robotino::api2::msleep(sleepMS);
+}
+
+
+int main(int argc, char** argv) {
+	std::ofstream idealTrajectory("ideal_trajectory.txt");
+	std::ofstream actualTrajectory("actual_trajectory.txt");
+
+	// Default IP address Robotino 4
+	std::string ip_addr = "192.168.0.1";
+
+	// Connect
+	std::cout << "Connecting ...";
+	com.setAddress(ip_addr.c_str());
+	com.connectToServer(true);
+
+	if (!com.isConnected()) {
+		std::cout << std::endl << "Could not connect to " <<
+			com.address() << std::endl;
+		rec::robotino::api2::shutdown();
+		exit(1);
+	}
+	else {
+		std::cout << "success" << std::endl;
+	}
+
+	for (unsigned int i = 0; i < motor_num; i++) {
+		motor[i].setMotorNumber(i);
+	}
+
+	const unsigned int sleepMs = 100;
+	const float speed = 0.06; // in m/s
+	//const float speedy = 0.05;
+	const float rotationSpeed = PI / 2; // 90 degrees rotation
+	const float side = 0.5; // length of the square's side
+	double x;  // x position
+	double y;   // y positon
+	double phi;  // rotation 
+	unsigned int start_time = com.msecsElapsed();
+	unsigned int time = com.msecsElapsed();
+	int number = 0;
+
+
+	// 记录理想轨迹
+	idealTrajectory << 0 << " " << 0 << std::endl;
+	idealTrajectory << 0 << " " << side << std::endl;
+	idealTrajectory << -side << " " << side << std::endl;
+	idealTrajectory << -side << " " << 0 << std::endl;
+	idealTrajectory << 0 << " " << 0 << std::endl;
+
+	// Table headline
+	std::cout << " | " << std::setw(col_width) << "x" << " | " <<
+		std::setw(col_width) << "y"
+		<< " | " << std::setw(col_width) << "phi"
+		<< " | " << std::setw(col_width) << "M1 pos" << " | "
+		<< std::setw(col_width) << "M2 pos" << std::setw(col_width) << "M3 pos"
+		<< " | " << std::setw(col_width) << "M1 vel" << " | "
+		<< std::setw(col_width) << "M2 vel"
+		<< " | " << std::setw(col_width) << "M3 vel" << " | "
+		<< std::setw(col_width) << "M1 cur"
+		<< " | " << std::setw(col_width) << "M2 cur" << " | "
+		<< std::setw(col_width) << "M3 cur"
+		<< " | " << std::endl;
+	std::cout << " |";
+	for (size_t i = 0; i < 12; i++) {
+		std::cout << std::string(col_width + 2, '-') << "|";
+	}
+	std::cout << std::endl;
+
+
+	int ST = 0;
+	odometry.set(0, 0, 0, false);
+	rec::robotino::api2::msleep(sleepMs);
+
+	while (number < 1)
+	{
+		float currentSpeedX = 0, currentSpeedY = 0;
+		switch (ST)
+		{
+		case 0:
+			odometry.readings(&x, &y, &phi);
+			if (y < side)
+			{
+				PIDMovement(0, speed, currentSpeedX, currentSpeedY, 0, sleepMs);// move up
+				Write(x, y, phi, actualTrajectory);
+			}
+			else
+			{
+				PIDMovement(0, 0, currentSpeedX, currentSpeedY, 0, sleepMs);
+				ST = 1;
+			}
+			break;
+		case 1:
+			odometry.readings(&x, &y, &phi);
+			if (x > -side)
+			{
+				PIDMovement(-speed, 0, currentSpeedX, currentSpeedY, 0, sleepMs); // move left
+				Write(x, y, phi, actualTrajectory);
+			}
+			else
+			{
+				PIDMovement(0, 0, currentSpeedX, currentSpeedY, 0, sleepMs);
+				ST = 2;
+			}
+			break;
+		case 2:
+			odometry.readings(&x, &y, &phi);
+			if (y > 0)
+			{
+				PIDMovement(0, -speed, currentSpeedX, currentSpeedY, 0, sleepMs); // move down
+				Write(x, y, phi, actualTrajectory);
+			}
+			else
+			{
+				PIDMovement(0, 0, currentSpeedX, currentSpeedY, 0, sleepMs);
+				ST = 3;
+			}
+			break;
+		case 3:
+			odometry.readings(&x, &y, &phi);
+			if (x < 0)
+			{
+				PIDMovement(speed, 0, currentSpeedX, currentSpeedY, 0, sleepMs); // move right
+				Write(x, y, phi, actualTrajectory);
+			}
+			else
+			{
+				PIDMovement(0, 0, currentSpeedX, currentSpeedY, 0, sleepMs);
+				ST = 0;
+				number++;
+			}
+			break;
+		}
+	}
+
+
+
+	PIDMovement(0, 0, 0, 0, 0, sleepMs); // stop
+
+		// 程序结束前关闭文件流
+	idealTrajectory.close();
+	actualTrajectory.close();
+
+	com.disconnectFromServer();
+	rec::robotino::api2::shutdown();
+	return 0;
+}
